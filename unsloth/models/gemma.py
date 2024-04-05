@@ -134,7 +134,7 @@ def GemmaModel_fast_forward_inference(
     position_ids,
     attention_mask = None,
 ):
-    out_weight = torch.empty_like(self.layers[0].input_layernorm.weight, dtype = torch.float32, device = "cuda")
+    out_weight = torch.empty_like(self.model.layers[0].input_layernorm.weight, dtype = torch.float32, device = "cuda")
     input_ids = input_ids[:,:self.max_seq_length]
     hidden_states = self.model.embed_tokens(input_ids)
     hidden_states = hidden_states.to(self.config.torch_dtype)
@@ -145,7 +145,12 @@ def GemmaModel_fast_forward_inference(
     bsz, q_len, hd = hidden_states.shape
     seq_len = past_key_values[0][0].shape[-2]
     if bsz != 1:
-        attention_mask = _prepare_4d_causal_attention_mask(attention_mask, (bsz, q_len), hidden_states, seq_len,)
+        attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            attention_mask,
+            (bsz, q_len),
+            hidden_states,
+            seq_len,
+        )
     pass
 
     next_decoder_cache = []
