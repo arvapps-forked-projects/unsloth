@@ -79,6 +79,7 @@ __all__ = [
     "offload_input_embeddings",
     "offload_output_embeddings",
     "is_bfloat16_supported",
+    "unsloth_offloaded_gradient_checkpoint",
 ]
 
 
@@ -381,7 +382,7 @@ class Unsloth_Offloaded_Gradient_Checkpointer(torch.autograd.Function):
     def forward(ctx, forward_function, hidden_states, *args):
         saved_hidden_states = hidden_states.to("cpu", non_blocking = True)
         with torch.no_grad():
-            (output,) = forward_function(hidden_states, *args)
+            output = forward_function(hidden_states, *args)
         ctx.save_for_backward(saved_hidden_states)
         ctx.forward_function = forward_function
         ctx.args = args
@@ -399,6 +400,12 @@ class Unsloth_Offloaded_Gradient_Checkpointer(torch.autograd.Function):
         torch.autograd.backward(output, dY)
         return (None, hidden_states.grad,) + (None,)*len(ctx.args)
     pass
+pass
+
+
+@torch._disable_dynamo
+def unsloth_offloaded_gradient_checkpoint(function, *args, use_reentrant = None, **kwargs):
+    return Unsloth_Offloaded_Gradient_Checkpointer.apply(function, *args)
 pass
 
 
