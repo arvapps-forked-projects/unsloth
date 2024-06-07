@@ -791,7 +791,7 @@ def CausalLM_fast_forward(fast_forward_inference):
         *args, **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         
-        if past_key_values is not None:
+        if past_key_values is not None and self.config.model_type != "qwen2":
             outputs = fast_forward_inference(
                 self,
                 input_ids,
@@ -1782,10 +1782,12 @@ class FastLlamaModel:
                     layer.self_attn.apply_qkv = apply_lora_qkv
                     n_qkv += 1
                 else:
-                    logger.warning_once(
-                        "Not an error, but Unsloth cannot patch Attention layers with our manual autograd engine since either LoRA adapters\n"\
-                        "are not enabled or a bias term (like in Qwen) is used."
-                    )
+                    if model_type != "qwen2":
+                        logger.warning_once(
+                            "Not an error, but Unsloth cannot patch Attention layers with our manual autograd engine since either LoRA adapters\n"\
+                            "are not enabled or a bias term (like in Qwen) is used."
+                        )
+                    pass
                 pass
 
                 # O attention patching
@@ -1828,6 +1830,11 @@ class FastLlamaModel:
 
     @staticmethod
     def for_inference(model):
+        if model.config.model_type == "qwen2":
+            FastLlamaModel.for_training(model)
+            return
+        pass
+
         internal_model = model
         internal_model.gradient_checkpointing = False
         internal_model.training = False
