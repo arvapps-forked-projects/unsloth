@@ -51,6 +51,7 @@ except:
 pass
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, AutoConfig
+from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING
 from transformers import set_seed as transformers_set_seed
 from peft import LoraConfig, TaskType, get_peft_model as _get_peft_model
 from peft import PeftModelForCausalLM
@@ -73,6 +74,9 @@ def original_apply_o(self, X):
     return O
 pass
 
+import os # Unsloth only works on NVIDIA GPUs for now
+device_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0") + ","
+device = f"cuda:{device_ids[:device_ids.find(',')]}"
 
 from math import sqrt as math_sqrt
 KV_CACHE_INCREMENT = 256 # KV Cache update size
@@ -131,15 +135,15 @@ def LlamaAttention_fast_forward_inference(
     # Prefill phase
     # if not hasattr(self, "paged_attention"):
     if do_prefill:
-        self.paged_attention = torch.empty((KV_CACHE_INCREMENT+seq_len+1, 2, bsz, n_kv_heads, head_dim), dtype = dtype, device = "cuda")
+        self.paged_attention = torch.empty((KV_CACHE_INCREMENT+seq_len+1, 2, bsz, n_kv_heads, head_dim), dtype = dtype, device = device)
         self.paged_attention_K = self.paged_attention[:,0]
         self.paged_attention_V = self.paged_attention[:,1]
         self.paged_attention_K[:seq_len] = K1.permute(2, 0, 1, 3)
         self.paged_attention_V[:seq_len] = V1.permute(2, 0, 1, 3)
-        self.temp_QA = torch.empty((2, bsz, 1, attention_size), dtype = dtype, device = "cuda")
-        self.temp_KV = torch.empty((2, bsz, 1, n_kv_heads*head_dim), dtype = dtype, device = "cuda")
-        self.RH_Q = torch.empty((bsz, n_heads, 1, head_dim), dtype = dtype, device = "cuda")
-        self.attention = torch.empty((bsz, n_heads, 1, KV_CACHE_INCREMENT+seq_len), dtype = dtype, device = "cuda")
+        self.temp_QA = torch.empty((2, bsz, 1, attention_size), dtype = dtype, device = device)
+        self.temp_KV = torch.empty((2, bsz, 1, n_kv_heads*head_dim), dtype = dtype, device = device)
+        self.RH_Q = torch.empty((bsz, n_heads, 1, head_dim), dtype = dtype, device = device)
+        self.attention = torch.empty((bsz, n_heads, 1, KV_CACHE_INCREMENT+seq_len), dtype = dtype, device = device)
         self.scalar = 1.0 / math_sqrt(self.head_dim)
         self.half_head_dim = head_dim // 2
     elif kv_seq_len >= self.paged_attention.shape[0]:
@@ -169,7 +173,7 @@ def LlamaAttention_fast_forward_inference(
     Qn *= cos
     Qn.addcmul_(RH_Q, sin)
 
-    RH_K = RH_Q[:,:n_kv_heads,:,:] # torch.empty((n_kv_heads, 1, head_dim), dtype = dtype, device = "cuda")
+    RH_K = RH_Q[:,:n_kv_heads,:,:] # torch.empty((n_kv_heads, 1, head_dim), dtype = dtype, device = device)
     RH_K[:,:,:,:h] = Kn[:,:,:,h:]
     RH_K[:,:,:,h:] = Kn[:,:,:,:h]
     torch.neg(RH_K[:,:,:,:h], out = RH_K[:,:,:,:h])
@@ -231,7 +235,7 @@ def fast_swiglu_inference(self, X):
     # up   = self.up_proj(X)
     bsz, _, hd = X.shape
     # mlp_size = self.config.intermediate_size
-    # temp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = "cuda")
+    # temp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = device)
 
     gate = fast_linear_forward(self.gate_proj, X)#, out = temp[0])
     up   = fast_linear_forward(self.  up_proj, X)#, out = temp[1])
@@ -521,7 +525,7 @@ def LlamaModel_fast_forward(
         position_ids = torch.arange(
             past_key_values_length, seq_length + past_key_values_length,
             dtype  = torch.int32,
-            device = "cuda",
+            device = device,
         )
         position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
     elif position_ids is not None:
@@ -841,8 +845,10 @@ def CausalLM_fast_forward(fast_forward_inference):
         if labels is not None:
             shift_logits = logits
             if not hasattr(self, "extra_ignored_labels"):
+                device_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0") + ","
+                device = f"cuda:{device_ids[:device_ids.find(',')]}" # Unsloth only works on NVIDIA GPUs for now
                 # Fixes https://github.com/unslothai/unsloth/issues/10
-                self.extra_ignored_labels = torch.full((self.max_seq_length, 1), -100, device = "cuda")
+                self.extra_ignored_labels = torch.full((self.max_seq_length, 1), -100, device = device)
             pass
             
             shift_labels = torch.hstack((labels[..., 1:], self.extra_ignored_labels[:labels.shape[0]]))
@@ -1028,16 +1034,16 @@ class FastLlamaModel:
 
     @staticmethod
     def from_pretrained(
-        model_name     = "unsloth/llama-2-7b-bnb-4bit",
-        max_seq_length = None,
-        dtype          = None,
-        load_in_4bit   = True,
-        token          = None,
-        device_map     = "sequential",
-        rope_scaling   = None,
-        fix_tokenizer  = True,
-        model_patcher  = None,
-        tokenizer_name = None,
+        model_name        = "unsloth/llama-3-8b-bnb-4bit",
+        max_seq_length    = None,
+        dtype             = None,
+        load_in_4bit      = True,
+        token             = None,
+        device_map        = "sequential",
+        rope_scaling      = None,
+        fix_tokenizer     = True,
+        model_patcher     = None,
+        tokenizer_name    = None,
         trust_remote_code = False,
         **kwargs,
     ):
@@ -1070,9 +1076,17 @@ class FastLlamaModel:
 
         assert(dtype == torch.float16 or dtype == torch.bfloat16 or dtype == torch.float32)
 
-        # RoPE scaling
-        model_max_seq_length = \
-            AutoConfig.from_pretrained(model_name, token = token).max_position_embeddings
+        # RoPE Scaling
+        model_config = AutoConfig.from_pretrained(model_name, token = token)
+        model_max_seq_length = model_config.max_position_embeddings
+
+        # Check if RoPE Scaling is even allowed
+        model_function = MODEL_FOR_CAUSAL_LM_MAPPING[model_config.__class__]
+        has_rope_scaling = False
+        try:
+            with open(inspect.getfile(model_function), "r") as file:
+                has_rope_scaling = "self.config.rope_scaling" in file.read()
+        except: pass
 
         # If max_seq_length is not specified, use maximum fron config
         if max_seq_length is None:
@@ -1080,14 +1094,28 @@ class FastLlamaModel:
         pass
 
         if (rope_scaling is None) and (max_seq_length > model_max_seq_length):
+
             rope_scaling = max_seq_length / model_max_seq_length
+
             logger.warning_once(
                 f"Unsloth: {model_name} can only handle sequence lengths of at most "\
                 f"{model_max_seq_length}.\nBut with kaiokendev's RoPE scaling of "\
                 f"{round(rope_scaling, 3)}, it can be magically be extended to "\
                 f"{max_seq_length}!"
             )
+
+            # Warn RoPE scaling isn't allowed
+            if not has_rope_scaling:
+                raise RuntimeError(
+                    "However, {model_name} doesn't support RoPE Scaling!\n"\
+                    "Please file a feature request at https://github.com/unslothai/unsloth."
+                )
+            pass
+
             rope_scaling = {"type": "linear", "factor": rope_scaling,}
+
+            # Add to kwargs
+            kwargs["rope_scaling"] = rope_scaling
         pass
 
         bnb_config = None
@@ -1103,39 +1131,16 @@ class FastLlamaModel:
         # https://huggingface.co/togethercomputer/LLaMA-2-7B-32K/discussions/12
         # RoPE Scaling's max_position_embeddings must be updated
         max_position_embeddings = max(max_seq_length, model_max_seq_length)
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                device_map              = device_map,
-                torch_dtype             = dtype,
-                quantization_config     = bnb_config,
-                token                   = token,
-                rope_scaling            = rope_scaling,
-                max_position_embeddings = max_position_embeddings,
-                trust_remote_code       = trust_remote_code,
-                **kwargs,
-            )
-        except Exception as error:
-            if "rope_scaling" in str(error):
-                if rope_scaling is not None:
-                    raise TypeError("Unsloth: {model_name} does not support rope_scaling.")
-                pass
-
-                # Counteract missing rope_scaling
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    device_map              = device_map,
-                    torch_dtype             = dtype,
-                    quantization_config     = bnb_config,
-                    token                   = token,
-                    max_position_embeddings = max_position_embeddings,
-                    trust_remote_code       = trust_remote_code,
-                    **kwargs,
-                )
-            else:
-                raise error
-            pass
-        pass
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map              = device_map,
+            torch_dtype             = dtype,
+            quantization_config     = bnb_config,
+            token                   = token,
+            max_position_embeddings = max_position_embeddings,
+            trust_remote_code       = trust_remote_code,
+            **kwargs,
+        )
 
         # Counteract saved tokenizers
         tokenizer_name = model_name if tokenizer_name is None else tokenizer_name
@@ -1423,7 +1428,6 @@ class FastLlamaModel:
 
         if loftq_config is None: loftq_config = {}
 
-        import inspect
         signature = str(inspect.signature(LoraConfig))
         SUPPORTS_LOFTQ  = "loftq_config" in signature
         SUPPORTS_RSLORA = "use_rslora"   in signature
@@ -1823,7 +1827,9 @@ class FastLlamaModel:
         # Patch cross entropy loss labels
         # Fixes https://github.com/unslothai/unsloth/issues/10
         max_seq_length = model.max_seq_length
-        extra_ignored_labels = torch.full((max_seq_length, 1), -100, device = "cuda")
+        device_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0") + ","
+        device = f"cuda:{device_ids[:device_ids.find(',')]}" # Unsloth only works on NVIDIA GPUs for now
+        extra_ignored_labels = torch.full((max_seq_length, 1), -100, device = device)
         model.model.extra_ignored_labels = extra_ignored_labels
         internal_model = model
         while hasattr(internal_model, "model"):
