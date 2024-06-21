@@ -74,11 +74,6 @@ def original_apply_o(self, X):
     return O
 pass
 
-import os # Unsloth only works on NVIDIA GPUs for now
-device_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0") + ","
-device = device_ids[:device_ids.find(',')] # Unsloth only works on NVIDIA GPUs for now
-device = f"cuda:{device if device.isdigit() else '0'}"
-
 from math import sqrt as math_sqrt
 KV_CACHE_INCREMENT = 256 # KV Cache update size
 torch_nn_functional_softmax = torch.nn.functional.softmax
@@ -136,15 +131,15 @@ def LlamaAttention_fast_forward_inference(
     # Prefill phase
     # if not hasattr(self, "paged_attention"):
     if do_prefill:
-        self.paged_attention = torch.empty((KV_CACHE_INCREMENT+seq_len+1, 2, bsz, n_kv_heads, head_dim), dtype = dtype, device = device)
+        self.paged_attention = torch.empty((KV_CACHE_INCREMENT+seq_len+1, 2, bsz, n_kv_heads, head_dim), dtype = dtype, device = "cuda:0")
         self.paged_attention_K = self.paged_attention[:,0]
         self.paged_attention_V = self.paged_attention[:,1]
         self.paged_attention_K[:seq_len] = K1.permute(2, 0, 1, 3)
         self.paged_attention_V[:seq_len] = V1.permute(2, 0, 1, 3)
-        self.temp_QA = torch.empty((2, bsz, 1, attention_size), dtype = dtype, device = device)
-        self.temp_KV = torch.empty((2, bsz, 1, n_kv_heads*head_dim), dtype = dtype, device = device)
-        self.RH_Q = torch.empty((bsz, n_heads, 1, head_dim), dtype = dtype, device = device)
-        self.attention = torch.empty((bsz, n_heads, 1, KV_CACHE_INCREMENT+seq_len), dtype = dtype, device = device)
+        self.temp_QA = torch.empty((2, bsz, 1, attention_size), dtype = dtype, device = "cuda:0")
+        self.temp_KV = torch.empty((2, bsz, 1, n_kv_heads*head_dim), dtype = dtype, device = "cuda:0")
+        self.RH_Q = torch.empty((bsz, n_heads, 1, head_dim), dtype = dtype, device = "cuda:0")
+        self.attention = torch.empty((bsz, n_heads, 1, KV_CACHE_INCREMENT+seq_len), dtype = dtype, device = "cuda:0")
         self.scalar = 1.0 / math_sqrt(self.head_dim)
         self.half_head_dim = head_dim // 2
     elif kv_seq_len >= self.paged_attention.shape[0]:
@@ -174,7 +169,7 @@ def LlamaAttention_fast_forward_inference(
     Qn *= cos
     Qn.addcmul_(RH_Q, sin)
 
-    RH_K = RH_Q[:,:n_kv_heads,:,:] # torch.empty((n_kv_heads, 1, head_dim), dtype = dtype, device = device)
+    RH_K = RH_Q[:,:n_kv_heads,:,:] # torch.empty((n_kv_heads, 1, head_dim), dtype = dtype, device = "cuda:0")
     RH_K[:,:,:,:h] = Kn[:,:,:,h:]
     RH_K[:,:,:,h:] = Kn[:,:,:,:h]
     torch.neg(RH_K[:,:,:,:h], out = RH_K[:,:,:,:h])
@@ -236,7 +231,7 @@ def fast_swiglu_inference(self, X):
     # up   = self.up_proj(X)
     bsz, _, hd = X.shape
     # mlp_size = self.config.intermediate_size
-    # temp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = device)
+    # temp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = "cuda:0")
 
     gate = fast_linear_forward(self.gate_proj, X)#, out = temp[0])
     up   = fast_linear_forward(self.  up_proj, X)#, out = temp[1])
@@ -526,7 +521,7 @@ def LlamaModel_fast_forward(
         position_ids = torch.arange(
             past_key_values_length, seq_length + past_key_values_length,
             dtype  = torch.int32,
-            device = device,
+            device = "cuda:0",
         )
         position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
     elif position_ids is not None:
@@ -846,11 +841,8 @@ def CausalLM_fast_forward(fast_forward_inference):
         if labels is not None:
             shift_logits = logits
             if not hasattr(self, "extra_ignored_labels"):
-                device_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0") + ","
-                device = device_ids[:device_ids.find(',')] # Unsloth only works on NVIDIA GPUs for now
-                device = f"cuda:{device if device.isdigit() else '0'}"
                 # Fixes https://github.com/unslothai/unsloth/issues/10
-                self.extra_ignored_labels = torch.full((self.max_seq_length, 1), -100, device = device)
+                self.extra_ignored_labels = torch.full((self.max_seq_length, 1), -100, device = "cuda:0")
             pass
             
             shift_labels = torch.hstack((labels[..., 1:], self.extra_ignored_labels[:labels.shape[0]]))
@@ -1173,10 +1165,10 @@ class FastLlamaModel:
                 inner_training_loop = Trainer._original_training_loop
         except:
             raise RuntimeError(
-                "Our OSS was designed for people with few GPU resources to level the playing field.\n"
-                "The OSS Apache 2 license only supports one GPU - please obtain a commercial license.\n"
-                "We're a 2 person team, so we still have to fund our development costs - thanks!\n"
-                "If you don't, please consider at least sponsoring us through Ko-fi! Appreciate it!",
+                'Unsloth currently does not work on multi GPU setups - sadly we are a 2 brother team so '\
+                'enabling it will require much more work, so we have to prioritize. Please understand!\n'\
+                'We do have a separate beta version, which you can contact us about!\n'\
+                'Thank you for your understanding and we appreciate it immensely!'
             )
         pass
 
@@ -1209,7 +1201,10 @@ class FastLlamaModel:
         output = re.findall(rb'([\\d]{1,})[\\s]{1,}M', output)
         output = sum(int(x.decode('utf-8'))/1024 > 4 for x in output)
         if output > 1: raise RuntimeError(
-            'Error: More than 1 GPUs have a lot of VRAM usage. Please obtain a commercial license.')
+            'Unsloth currently does not work on multi GPU setups - sadly we are a 2 brother team so '\\
+            'enabling it will require much more work, so we have to prioritize. Please understand!\\n'\\
+            'We do have a separate beta version, which you can contact us about!\\n'\\
+            'Thank you for your understanding and we appreciate it immensely!')
         for _ in range(3):
             gc.collect()
             torch.cuda.empty_cache()"""
@@ -1222,10 +1217,10 @@ class FastLlamaModel:
             args.gradient_accumulation_steps // self._train_batch_size
         if n_total_devices > 1:
             logger.warning_once(
-                "* Our OSS was designed for people with few GPU resources to level the playing field.\\n"
-                "* The OSS Apache 2 license only supports one GPU - please obtain a commercial license.\\n"
-                "* We're a 2 person team, so we still have to fund our development costs - thanks!\\n"
-                "* If you don't, please consider at least sponsoring us through Ko-fi! Appreciate it!",
+                '* Unsloth currently does not work on multi GPU setups - sadly we are a 2 brother team so ' \\
+                '* enabling it will require much more work, so we have to prioritize. Please understand!\\n' \\
+                '* We do have a separate beta version, which you can contact us about!\\n'\\
+                '* Thank you for your understanding and we appreciate it immensely!'
             )
         debug_info ="""
         debug_info = debug_info.split('\n')
@@ -1252,10 +1247,10 @@ class FastLlamaModel:
         n_total_devices = total_batches // ga // bsz
         if n_total_devices > 1:
             logger.warning_once(
-                "* Our OSS was designed for people with few GPU resources to level the playing field.\\n"
-                "* The OSS Apache 2 license only supports one GPU - please obtain a commercial license.\\n"
-                "* We're a 2 person team, so we still have to fund our development costs - thanks!\\n"
-                "* If you don't, please consider at least sponsoring us through Ko-fi! Appreciate it!",
+                '* Unsloth currently does not work on multi GPU setups - sadly we are a 2 brother team so ' \\
+                '* enabling it will require much more work, so we have to prioritize. Please understand!\\n' \\
+                '* We do have a separate beta version, which you can contact us about!\\n'\\
+                '* Thank you for your understanding and we appreciate it immensely!'
             )
             divisor = n_total_devices / 1
             bsz = self._train_batch_size = max(int(bsz / divisor), 1)
@@ -1281,10 +1276,10 @@ class FastLlamaModel:
         )
         if "n_total_devices >" not in inner_training_loop:
             raise RuntimeError(
-                "Our OSS was designed for people with few GPU resources to level the playing field.\n"
-                "The OSS Apache 2 license only supports one GPU - please obtain a commercial license.\n"
-                "We're a 2 person team, so we still have to fund our development costs - thanks!\n"
-                "If you don't, please consider at least sponsoring us through Ko-fi! Appreciate it!",
+                'Unsloth currently does not work on multi GPU setups - sadly we are a 2 brother team so '\
+                'enabling it will require much more work, so we have to prioritize. Please understand!\n'\
+                'We do have a separate beta version, which you can contact us about!\n'\
+                'Thank you for your understanding and we appreciate it immensely!'
             )
         pass
         inner_training_loop = inner_training_loop.replace(
@@ -1471,7 +1466,7 @@ class FastLlamaModel:
                     print("Unsloth: Casting embed_tokens to float32")
 
                     model.model.model.embed_tokens.modules_to_save.default\
-                        .to(device = device, dtype = torch.float32, non_blocking = True)
+                        .to(device = "cuda:0", dtype = torch.float32, non_blocking = True)
                     model.model.model.embed_tokens.modules_to_save.default.requires_grad_(True)
 
                     # [TODO] Move old embed_tokens to CPU - should be disk!
@@ -1484,7 +1479,7 @@ class FastLlamaModel:
                     print("Unsloth: Casting lm_head to float32")
 
                     model.model.lm_head.modules_to_save.default\
-                        .to(device = device, dtype = torch.float32, non_blocking = True)
+                        .to(device = "cuda:0", dtype = torch.float32, non_blocking = True)
                     model.model.lm_head.modules_to_save.default.requires_grad_(True)
 
                     # [TODO] Move old lm_head to CPU - should be disk!
@@ -1713,7 +1708,7 @@ class FastLlamaModel:
             print("Unsloth: Casting embed_tokens to float32")
             assert(hasattr(model.model.model.embed_tokens, "modules_to_save"))
             model.model.model.embed_tokens.modules_to_save.default\
-                .to(device = device, dtype = torch.float32, non_blocking = True)
+                .to(device = "cuda:0", dtype = torch.float32, non_blocking = True)
             model.model.model.embed_tokens.modules_to_save.default.requires_grad_(True)
         pass
 
@@ -1721,7 +1716,7 @@ class FastLlamaModel:
             print("Unsloth: Casting lm_head to float32")
             assert(hasattr(model.model.lm_head, "modules_to_save"))
             model.model.lm_head.modules_to_save.default\
-                .to(device = device, dtype = torch.float32, non_blocking = True)
+                .to(device = "cuda:0", dtype = torch.float32, non_blocking = True)
             model.model.lm_head.modules_to_save.default.requires_grad_(True)
         pass
 
@@ -1791,10 +1786,10 @@ class FastLlamaModel:
         from transformers.trainer import Trainer 
         if Trainer._inner_training_loop.__name__ != "_fast_inner_training_loop":
             raise RuntimeError(
-                "Our OSS was designed for people with few GPU resources to level the playing field.\n"
-                "The OSS Apache 2 license only supports one GPU - please obtain a commercial license.\n"
-                "We're a 2 person team, so we still have to fund our development costs - thanks!\n"
-                "If you don't, please consider at least sponsoring us through Ko-fi! Appreciate it!",
+                'Unsloth currently does not work on multi GPU setups - sadly we are a 2 brother team so '\
+                'enabling it will require much more work, so we have to prioritize. Please understand!\n'\
+                'We do have a separate beta version, which you can contact us about!\n'\
+                'Thank you for your understanding and we appreciate it immensely!'
             )
         pass
 
@@ -1902,10 +1897,7 @@ class FastLlamaModel:
         # Patch cross entropy loss labels
         # Fixes https://github.com/unslothai/unsloth/issues/10
         max_seq_length = model.max_seq_length
-        device_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "0") + ","
-        device = device_ids[:device_ids.find(',')] # Unsloth only works on NVIDIA GPUs for now
-        device = f"cuda:{device if device.isdigit() else '0'}"
-        extra_ignored_labels = torch.full((max_seq_length, 1), -100, device = device)
+        extra_ignored_labels = torch.full((max_seq_length, 1), -100, device = "cuda:0")
         model.model.extra_ignored_labels = extra_ignored_labels
         internal_model = model
         while hasattr(internal_model, "model"):
