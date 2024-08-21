@@ -472,8 +472,8 @@ pass
 
 
 # =========================================== Phi-3
+# "{{ bos_token }}"\ # Phi-3.5 removes BOS?
 phi3_template = \
-    "{{ bos_token }}"\
     "{% for message in messages %}"\
         "{% if message['role'] == 'user' %}"\
             "{{'<|user|>\n' + message['content'] + '<|end|>\n'}}"\
@@ -505,7 +505,9 @@ PARAMETER stop "<|assistant|>"
 '''
 
 phi3_template_eos_token = "<|end|>"
-CHAT_TEMPLATES["phi-3"] = (phi3_template, phi3_template_eos_token, False, phi3_ollama,)
+CHAT_TEMPLATES["phi-3"]   = (phi3_template, phi3_template_eos_token, False, phi3_ollama,)
+CHAT_TEMPLATES["phi-35"]  = CHAT_TEMPLATES["phi-3"]
+CHAT_TEMPLATES["phi-3.5"] = CHAT_TEMPLATES["phi-3"]
 pass
 
 # =========================================== Llama-3.1
