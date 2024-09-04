@@ -39,6 +39,8 @@ __all__ = [
     "create_boolean_mask",
     "torch_amp_custom_fwd",
     "torch_amp_custom_bwd",
+    "accelerate_old_send_to_device",
+    "accelerate_new_send_to_device",
 ]
 
 import torch
@@ -283,10 +285,13 @@ pass
 
 # =============================================
 # Fix new Xformers versions TypeError: Multiple dispatch failed for 'torch._ops.aten.to.dtype_layout'
+accelerate_old_send_to_device = None
+accelerate_new_send_to_device = None
 if Version(xformers_version) >= Version("0.0.27"):
     import accelerate.utils.operations
     if hasattr(accelerate.utils.operations, "send_to_device") and \
         accelerate.utils.operations.send_to_device.__name__ != "_fixed_send_to_device":
+        accelerate_old_send_to_device = accelerate.utils.operations.send_to_device
         from accelerate.utils.operations import *
         send_to_device = inspect.getsource(accelerate.utils.operations.send_to_device)
         send_to_device = re.sub(
@@ -296,6 +301,7 @@ if Version(xformers_version) >= Version("0.0.27"):
         ).replace("def send_to_device", "def _fixed_send_to_device")
         exec(send_to_device)
         # accelerate.utils.operations.send_to_device = _fixed_send_to_device
+        accelerate_new_send_to_device = _fixed_send_to_device
     pass
 pass
 # =============================================
