@@ -31,6 +31,7 @@ SUPPORTS_FOURBIT = transformers_version >= Version("4.37")
 SUPPORTS_GEMMA   = transformers_version >= Version("4.38")
 SUPPORTS_GEMMA2  = transformers_version >= Version("4.42")
 SUPPORTS_LLAMA31 = transformers_version >= Version("4.43.2")
+SUPPORTS_LLAMA32 = transformers_version  > Version("4.45.0")
 if SUPPORTS_GEMMA:
     from .gemma  import FastGemmaModel
 if SUPPORTS_GEMMA2:
@@ -242,7 +243,9 @@ class FastLanguageModel(FastLlamaModel):
                     f'Try `pip install --upgrade "transformers>=4.43.2"`\n'\
                     f"to obtain the latest transformers build, then restart this session."\
                 )
+
             dispatch_model = FastLlamaModel
+
         elif model_type == "mistral": dispatch_model = FastMistralModel
         elif model_type == "gemma":
             if not SUPPORTS_GEMMA:
