@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "2025.3.3"
+__version__ = "2025.3.6"
 
 __all__ = [
     "SUPPORTS_BFLOAT16",
@@ -39,8 +39,8 @@ __all__ = [
     "create_boolean_mask",
     "torch_amp_custom_fwd",
     "torch_amp_custom_bwd",
-    "accelerate_old_send_to_device",
-    "accelerate_new_send_to_device",
+    # "accelerate_old_send_to_device",
+    # "accelerate_new_send_to_device",
     "patch_gradient_accumulation_fix",
     "patch_compiling_bitsandbytes",
     "patch_regional_compilation",
@@ -241,24 +241,24 @@ pass
 
 # =============================================
 # Fix KeyError: 'Cache only has 0 layers, attempted to access layer with index 0'
-import transformers.cache_utils
-if hasattr(transformers.cache_utils, "DynamicCache") and \
-    transformers.cache_utils.DynamicCache.__getitem__.__name__ != "__cache_utils_getitem__":
+# import transformers.cache_utils
+# if hasattr(transformers.cache_utils, "DynamicCache") and \
+#     transformers.cache_utils.DynamicCache.__getitem__.__name__ != "__cache_utils_getitem__":
 
-    source = inspect.getsource(transformers.cache_utils.DynamicCache.__getitem__)
-    start = source.find("def")
-    spaces = start*" "
-    source = source.split("\n")
-    source = "\n".join(x[start:] for x in source)
-    where = source.find("raise KeyError")
-    source = source[:where] + \
-        f"if len(self) == 0:\n{spaces}{spaces}"\
-        "    raise RuntimeError('Unsloth: You must call `FastLanguageModel.for_inference(model)` before doing inference for Unsloth models.')\n" + \
-        f"{spaces}{spaces}else:\n{spaces}{spaces}{spaces}" + source[where:]
-    source = source.replace("__getitem__", "__cache_utils_getitem__", 1)
-    exec(source)
-    transformers.cache_utils.DynamicCache.__getitem__ = __cache_utils_getitem__
-pass
+#     source = inspect.getsource(transformers.cache_utils.DynamicCache.__getitem__)
+#     start = source.find("def")
+#     spaces = start*" "
+#     source = source.split("\n")
+#     source = "\n".join(x[start:] for x in source)
+#     where = source.find("raise KeyError")
+#     source = source[:where] + \
+#         f"if len(self) == 0:\n{spaces}{spaces}"\
+#         "    raise RuntimeError('Unsloth: You must call `FastLanguageModel.for_inference(model)` before doing inference for Unsloth models.')\n" + \
+#         f"{spaces}{spaces}else:\n{spaces}{spaces}{spaces}" + source[where:]
+#     source = source.replace("__getitem__", "__cache_utils_getitem__", 1)
+#     exec(source)
+#     transformers.cache_utils.DynamicCache.__getitem__ = __cache_utils_getitem__
+# pass
 # =============================================
 
 # =============================================
@@ -411,25 +411,25 @@ pass
 
 # =============================================
 # Fix new Xformers versions TypeError: Multiple dispatch failed for 'torch._ops.aten.to.dtype_layout'
-accelerate_old_send_to_device = None
-accelerate_new_send_to_device = None
-if xformers_version is not None and Version(xformers_version) >= Version("0.0.27"):
-    import accelerate.utils.operations
-    if hasattr(accelerate.utils.operations, "send_to_device") and \
-        accelerate.utils.operations.send_to_device.__name__ != "_fixed_send_to_device":
-        accelerate_old_send_to_device = accelerate.utils.operations.send_to_device
-        from accelerate.utils.operations import *
-        send_to_device = inspect.getsource(accelerate.utils.operations.send_to_device)
-        send_to_device = re.sub(
-            r"([ ]{4,})return tensor\.to\(device\)",
-            r"\1try: return tensor.to(device)\n\1except: return tensor",
-            send_to_device,
-        ).replace("def send_to_device", "def _fixed_send_to_device")
-        exec(send_to_device)
-        # accelerate.utils.operations.send_to_device = _fixed_send_to_device
-        accelerate_new_send_to_device = _fixed_send_to_device
-    pass
-pass
+# accelerate_old_send_to_device = None
+# accelerate_new_send_to_device = None
+# if xformers_version is not None and Version(xformers_version) >= Version("0.0.27"):
+#     import accelerate.utils.operations
+#     if hasattr(accelerate.utils.operations, "send_to_device") and \
+#         accelerate.utils.operations.send_to_device.__name__ != "_fixed_send_to_device":
+#         accelerate_old_send_to_device = accelerate.utils.operations.send_to_device
+#         from accelerate.utils.operations import *
+#         send_to_device = inspect.getsource(accelerate.utils.operations.send_to_device)
+#         send_to_device = re.sub(
+#             r"([ ]{4,})return tensor\.to\(device\)",
+#             r"\1try: return tensor.to(device)\n\1except: return tensor",
+#             send_to_device,
+#         ).replace("def send_to_device", "def _fixed_send_to_device")
+#         exec(send_to_device)
+#         # accelerate.utils.operations.send_to_device = _fixed_send_to_device
+#         accelerate_new_send_to_device = _fixed_send_to_device
+#     pass
+# pass
 
 # Transformers 4.46 breaks dynamic caching. This is a hack
 import transformers.generation.configuration_utils
@@ -1050,7 +1050,10 @@ def _unsloth_pre_compute_loss(self, model, inputs, *args, **kwargs):
         pass
     pass
 
-    if num_items_in_batch is None:
+    # Get gradient accumulation steps if possible
+    if num_items_in_batch is None and \
+        getattr(self, "args", {}).get("gradient_accumulation_steps", 1) != 1:
+
         name = (model.base_model.model if hasattr(model, "base_model") else model).__class__.__name__
         logger.warning_once(
             f"Unsloth: Not an error, but {name} does not accept `num_items_in_batch`.\n"\
@@ -1245,10 +1248,11 @@ pass
 # os.environ['UNSLOTH_RETURN_LOGITS'] = '1'
 LOGITS_ERROR_STRING = \
     "Unsloth: Logits are empty from 2024.11 onwards. To get raw logits again, please "\
-    'set the environment variable `UNSLOTH_RETURN_LOGITS` to `"1" BEFORE starting to train ie before `trainer.train()`. For example:\n\n'\
-    "import os\n"\
+    'set the environment variable `UNSLOTH_RETURN_LOGITS` to `"1" BEFORE starting to train ie before `trainer.train()`. For example:\n'\
+    "```\nimport os\n"\
     "os.environ['UNSLOTH_RETURN_LOGITS'] = '1'\n"\
-    "... trainer.train() ..."
+    "trainer.train()\n```\n"\
+    "No need to restart your console - just add `os.environ['UNSLOTH_RETURN_LOGITS'] = '1'` before trainer.train() and re-run the cell!"
 
 def raise_logits_error(*args, **kwargs): raise NotImplementedError(LOGITS_ERROR_STRING)
 def return_none(*args, **kwargs): return None

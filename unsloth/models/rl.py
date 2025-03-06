@@ -60,7 +60,7 @@ def PatchRL(FastLanguageModel):
     def unsloth_unwrap_model_for_generation(model, *args, **kwargs):
         with unwrap_model_for_generation(model, *args, **kwargs) as unwrapped_model:
             # Put the model in inference mode.
-            FastLanguageModel.for_inference(unwrapped_model)
+            FastLanguageModel.for_inference(model)
 
             # We must use .clone for Unsloth since we force inference_mode
             # Rather we should have used no_grad
@@ -282,6 +282,17 @@ def _patch_trl_rl_trainers(trainer_file = "grpo_trainer"):
         "if args.bf16 and fp16_full_eval: args.bf16_full_eval = True; args.fp16_full_eval = False\n"\
         "if not bf16_full_eval and not fp16_full_eval: args.bf16_full_eval = args.bf16; args.fp16_full_eval = args.fp16\n"
         extra_args += eval_changes
+    pass
+
+    # Force logits to be produced if preprocess_logits_for_metrics or compute_metrics is used
+    if "model" in call_args:
+        logits_check = \
+        "_output_logits = False\n"\
+        "if locals().get('compute_metrics', None) is not None: _output_logits = True\n"\
+        "if locals().get('preprocess_logits_for_metrics', None) is not None: _output_logits = True\n"\
+        "if _output_logits:\n"\
+        "    os.environ['UNSLOTH_RETURN_LOGITS'] = '1'\n"
+        extra_args += logits_check
     pass
 
     # Check max_seq_length
