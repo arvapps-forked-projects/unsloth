@@ -107,7 +107,7 @@ import torch
 import numpy as np
 from contextlib import nullcontext
 from torch.nn import functional as F
-from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling
+from transformers import DataCollatorForSeq2Seq, DataCollatorForLanguageModeling as TransformersDataCollatorForLanguageModeling
 
 torch_compile_options = {{
     "epilogue_fusion"   : True,
@@ -358,8 +358,8 @@ def _patch_trl_rl_trainers(trainer_file = "grpo_trainer"):
         "from unsloth_zoo.vision_utils import UnslothVisionDataCollator\n"\
         "if not isinstance(data_collator, UnslothVisionDataCollator):\n"\
         "    if isinstance(data_collator, DataCollatorForSeq2Seq) and 'labels' not in train_dataset.column_names:\n"\
-        "        data_collator = DataCollatorForLanguageModeling(__tokenizer, mlm = False)\n"\
-        "    elif isinstance(data_collator, DataCollatorForLanguageModeling) and 'labels' in train_dataset.column_names:\n"\
+        "        data_collator = TransformersDataCollatorForLanguageModeling(__tokenizer, mlm = False)\n"\
+        "    elif isinstance(data_collator, TransformersDataCollatorForLanguageModeling) and 'labels' in train_dataset.column_names:\n"\
         "        data_collator = DataCollatorForSeq2Seq(__tokenizer)\n"\
         "else:\n"\
         "    if hasattr(args, 'remove_unused_columns'): args.remove_unused_columns = False\n"\
@@ -374,7 +374,7 @@ def _patch_trl_rl_trainers(trainer_file = "grpo_trainer"):
         "        if isinstance(data_collator, DataCollatorForSeq2Seq):\n"\
         "            data_collator = DataCollatorForSeq2Seq(__tokenizer.tokenizer)\n"\
         "        else:\n"\
-        "            data_collator = DataCollatorForLanguageModeling(__tokenizer.tokenizer, mlm = False)\n"
+        "            data_collator = TransformersDataCollatorForLanguageModeling(__tokenizer.tokenizer, mlm = False)\n"
         extra_args += pad_check
     pass
 
@@ -395,7 +395,7 @@ def _patch_trl_rl_trainers(trainer_file = "grpo_trainer"):
     if trainer_file in RL_METRICS_CHANGES:
         process_extra_args = RL_METRICS_CHANGES[trainer_file]
         for process_extra_arg in process_extra_args:
-            other_metrics_processor += process_extra_arg(call_args, extra_args)
+            other_metrics_processor += process_extra_arg(old_RLTrainer_source, old_RLConfig_source)
     pass
 
     # Add statistics as well!
@@ -479,6 +479,39 @@ def _patch_trl_rl_trainers(trainer_file = "grpo_trainer"):
         "    from multiprocessing import cpu_count\n"\
         "    dataset_num_proc = cpu_count()\n"
         extra_args += num_proc_check
+    pass
+
+    # Check for loss_type = dr_grpo and scale_rewards for GRPO
+    if "loss_type" in call_args and "scale_rewards" in call_args:
+        check_dr_grpo = \
+        "if loss_type.lower() == 'dr_grpo':\n"\
+        "    loss_type = 'dr_grpo'\n"\
+        "elif loss_type.lower() == 'dapo':\n"\
+        "    loss_type = 'dapo'\n"\
+        "if loss_type.lower() == 'dr_grpo':\n"\
+        "    if scale_rewards == None:\n"\
+        "        scale_rewards = True\n"\
+        "    elif scale_rewards == True:\n"\
+        "        print('The Dr GRPO paper recommends setting `scale_rewards` to False! Will override. Set it to `None` to force False.')\n"\
+        "        scale_rewards = False\n"\
+        "elif loss_type.lower() == 'dapo':\n"\
+        "    print('The DAPO paper recommends `mask_truncated_completions = True`')\n"\
+        "    print('The DAPO paper recommends `epsilon_high = 0.28`')\n"\
+        "    mask_truncated_completions = True\n"\
+        "    epsilon_high = 0.28\n"\
+        "\n"
+        extra_args += check_dr_grpo
+    pass
+
+    # Check GRPO num_generations mismatch
+    if "per_device_train_batch_size" in call_args and "num_generations" in call_args: 
+        check_num_generations = \
+        "if (per_device_train_batch_size // num_generations) * num_generations != per_device_train_batch_size:\n"\
+        "    print('Unsloth: We now expect `per_device_train_batch_size` to be a multiple of `num_generations`.\\n"\
+                   "We will change the batch size of ' + str(per_device_train_batch_size) + ' to the `num_generations` of ' + str(num_generations))\n"\
+        "    per_device_train_batch_size = num_generations\n"\
+        "\n"
+        extra_args += check_num_generations
     pass
 
     # Edit config with anything extra
